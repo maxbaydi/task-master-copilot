@@ -49,10 +49,10 @@
 
 1. Для глобальной установки:
    ```
-   npm update -g task-master-ai
+   npm update -g task-master-copilot
    ```
 
 2. Для локальной установки в проекте:
    ```
-   npm update task-master-ai
+   npm update task-master-copilot
    ```

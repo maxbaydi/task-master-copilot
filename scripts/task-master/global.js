@@ -8,7 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const os = require('os');
-const { execSync } = require('child_process');
+const { execSync, spawnSync } = require('child_process');
 const chalk = require('chalk');
 
 // Определяем пути
@@ -26,7 +26,16 @@ if (!fs.existsSync(globalTasksDir)) {
 }
 
 // Функция для определения, используется ли локальный или глобальный режим
-function determineMode() {
+function determineMode(command) {
+  // При команде init всегда создаем локальную структуру
+  if (command === 'init') {
+    return {
+      mode: 'global', // сохраняем глобальный режим, но init создаст локальную структуру
+      tasksFile: localTasksFile,
+      tasksDir: localTasksDir
+    };
+  }
+
   // Проверяем наличие локального tasks.json
   const hasLocalTasks = fs.existsSync(localTasksFile);
   
@@ -69,63 +78,91 @@ function showHelp() {
 
 // Основная функция для запуска команд
 function runCommand() {
-  const args = process.argv.slice(2);
-  const command = args[0] || 'help';
-  
-  // Определяем режим работы (локальный или глобальный)
-  const { mode, tasksFile, tasksDir } = determineMode();
-  
-  // Получаем путь к директории скриптов
-  const scriptDir = path.dirname(__filename);
-  
-  // Устанавливаем переменную окружения с путем к файлу задач
-  process.env.TASK_MASTER_FILE = tasksFile;
-  process.env.TASK_MASTER_DIR = tasksDir;
-  process.env.TASK_MASTER_MODE = mode;
-  
-  // Маппинг команд на соответствующие скрипты
-  const commandMap = {
-    'init': path.join(scriptDir, 'init.js'),
-    'list': path.join(scriptDir, 'list.js'),
-    'next': path.join(scriptDir, 'next.js'),
-    'generate': path.join(scriptDir, 'generate.js'),
-    'complete': path.join(scriptDir, 'complete.js'),
-    'chat': path.join(scriptDir, 'chat.js'),
-    'help': null // Обрабатываем справку отдельно
-  };
-  
-  // Если команда неизвестна, показываем справку
-  if (!commandMap[command]) {
-    if (command === 'help') {
-      showHelp();
-    } else {
-      console.log(chalk.red(`Неизвестная команда: ${command}`));
-      showHelp();
-    }
-    return;
-  }
-  
   try {
-    // Выполняем скрипт для соответствующей команды
+    const args = process.argv.slice(2);
+    const command = args[0] || 'help';
+    
+    // Определяем режим работы (локальный или глобальный)
+    const { mode, tasksFile, tasksDir } = determineMode(command);
+    
+    // Получаем путь к директории скриптов
+    const scriptDir = path.dirname(__filename);
+    
+    // Устанавливаем переменную окружения с путем к файлу задач
+    process.env.TASK_MASTER_FILE = tasksFile;
+    process.env.TASK_MASTER_DIR = tasksDir;
+    process.env.TASK_MASTER_MODE = mode;
+    
+    console.log(chalk.blue(`Режим работы: ${mode}`));
+    console.log(chalk.blue(`Файл задач: ${tasksFile}`));
+    console.log(chalk.blue(`Директория скриптов: ${scriptDir}`));
+    
+    // Маппинг команд на соответствующие скрипты
+    const commandMap = {
+      'init': path.join(scriptDir, 'init.js'),
+      'list': path.join(scriptDir, 'list.js'),
+      'next': path.join(scriptDir, 'next.js'),
+      'generate': path.join(scriptDir, 'generate.js'),
+      'complete': path.join(scriptDir, 'complete.js'),
+      'chat': path.join(scriptDir, 'chat.js'),
+      'help': null // Обрабатываем справку отдельно
+    };
+    
+    // Если команда неизвестна, показываем справку
+    if (!commandMap[command]) {
+      if (command === 'help') {
+        showHelp();
+      } else {
+        console.log(chalk.red(`Неизвестная команда: ${command}`));
+        showHelp();
+      }
+      return;
+    }
+    
+    // Проверяем существование файла скрипта
     const scriptPath = commandMap[command];
+    if (!fs.existsSync(scriptPath)) {
+      console.log(chalk.red(`Ошибка: Скрипт ${scriptPath} не найден`));
+      console.log(chalk.yellow(`Доступные скрипты в директории ${scriptDir}:`));
+      const files = fs.readdirSync(scriptDir);
+      files.forEach(file => {
+        console.log(`  - ${file}`);
+      });
+      return;
+    }
+    
+    console.log(chalk.green(`Запускаем скрипт: ${scriptPath}`));
+    
+    // Выполняем скрипт для соответствующей команды
     const remainingArgs = args.slice(1);
     
     if (command === 'chat') {
       // Для команды chat, передаем все оставшиеся аргументы как единую строку
       const chatCommand = remainingArgs.join(' ');
-      require(scriptPath);
       
-      // Напрямую вызываем функцию processCommand из chat.js
-      const { processCommand } = require(scriptPath);
-      const result = processCommand(chatCommand);
-      console.log(result);
+      // Запускаем скрипт chat.js напрямую через spawn для лучшей обработки вывода
+      const result = spawnSync('node', [scriptPath, chatCommand], {
+        stdio: 'inherit',
+        env: process.env
+      });
+      
+      if (result.error) {
+        console.log(chalk.red(`Ошибка при выполнении команды: ${result.error.message}`));
+      }
     } else {
       // Для других команд, запускаем скрипт с оставшимися аргументами
-      process.argv = [process.argv[0], scriptPath, ...remainingArgs];
-      require(scriptPath);
+      const result = spawnSync('node', [scriptPath, ...remainingArgs], {
+        stdio: 'inherit',
+        env: process.env
+      });
+      
+      if (result.error) {
+        console.log(chalk.red(`Ошибка при выполнении команды: ${result.error.message}`));
+      }
     }
   } catch (error) {
     console.log(chalk.red(`Ошибка при выполнении команды: ${error.message}`));
+    console.log(chalk.red(`Стек ошибки: ${error.stack}`));
   }
 }
 

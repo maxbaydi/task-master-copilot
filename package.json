@@ -1,6 +1,6 @@
 {
-  "name": "task-master-ai",
-  "version": "1.0.0",
+  "name": "task-master-copilot",
+  "version": "1.0.1",
   "description": "Task Master - система управления задачами для проектов без внешних API",
   "main": "scripts/task-master/install.js",
   "bin": {
@@ -23,6 +23,10 @@
   },
   "dependencies": {
     "chalk": "^4.1.2"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/maxbaydi/task-master-copilot.git"
   },
   "keywords": [
     "task",

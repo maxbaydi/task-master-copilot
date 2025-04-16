@@ -20,7 +20,7 @@ Task Master - это система управления задачами для
 
 ```bash
 # Клонирование репозитория
-git clone https://github.com/yourusername/task-master.git temp-task-master
+git clone https://github.com/maxbaydi/task-master-copilot.git temp-task-master
 
 # Установка из локального репозитория
 node temp-task-master/scripts/task-master/install.js
@@ -32,7 +32,7 @@ rm -rf temp-task-master
 ### Глобальная установка (из npm)
 
 ```bash
-npm install -g task-master-ai
+npm install -g task-master-copilot
 ```
 
 ## Использование
@@ -136,7 +136,7 @@ MIT
 
 ## Автор
 
-SadoGrm Team
+Max Bay
 
 ## Дополнительная документация
 
