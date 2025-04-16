@@ -1,0 +1,39 @@
+{
+  "name": "task-master-ai",
+  "version": "1.0.0",
+  "description": "Task Master - система управления задачами для проектов без внешних API",
+  "main": "scripts/task-master/install.js",
+  "bin": {
+    "task-master": "scripts/task-master/global.js",
+    "task-master-init": "scripts/task-master/init.js",
+    "task-master-list": "scripts/task-master/list.js",
+    "task-master-next": "scripts/task-master/next.js",
+    "task-master-generate": "scripts/task-master/generate.js",
+    "task-master-complete": "scripts/task-master/complete.js",
+    "task-master-chat": "scripts/task-master/chat.js"
+  },
+  "scripts": {
+    "install": "node scripts/task-master/install.js",
+    "task-master:init": "node scripts/task-master/init.js",
+    "task-master:list": "node scripts/task-master/list.js",
+    "task-master:next": "node scripts/task-master/next.js",
+    "task-master:generate": "node scripts/task-master/generate.js",
+    "task-master:complete": "node scripts/task-master/complete.js",
+    "task-master:chat": "node scripts/task-master/chat.js"
+  },
+  "dependencies": {
+    "chalk": "^4.1.2"
+  },
+  "keywords": [
+    "task",
+    "management",
+    "project",
+    "organization",
+    "todo",
+    "ai",
+    "assistant"
+  ],
+  "author": "SadoGrm Team",
+  "license": "MIT",
+  "preferGlobal": true
+}
