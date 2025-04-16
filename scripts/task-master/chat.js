@@ -161,6 +161,44 @@ function processCommand(command) {
 }
 
 /**
+ * Обработчик команды "Продолжить итерацию" - завершает текущую задачу и переходит к следующей
+ * @param {string} command - Исходная команда из чата
+ * @returns {string} - Ответ для вывода в чат
+ */
+function continueCopilotIteration(command) {
+  // Получаем текущую активную задачу
+  const currentTask = require('./next').getCurrentTask();
+  
+  if (!currentTask) {
+    return 'Нет активной задачи в процессе выполнения. Используйте "дай следующую задачу" чтобы начать работу.';
+  }
+  
+  // Завершаем текущую задачу
+  const completeResult = require('./complete').completeTaskWithContextUpdate(
+    currentTask.id.toString(), 
+    `Задача завершена через интерфейс чата (команда: "${command}")`
+  );
+  
+  if (!completeResult.success) {
+    return `❌ Не удалось завершить текущую задачу: ${completeResult.message}`;
+  }
+  
+  // Если нет следующей задачи
+  if (!completeResult.nextTask) {
+    return `✅ Задача #${currentTask.id} "${currentTask.title}" успешно завершена. Больше нет задач в очереди.`;
+  }
+  
+  // Начинаем выполнение следующей задачи
+  require('./complete').startTaskExecution(completeResult.nextTask.id.toString());
+  
+  return `✅ Задача #${currentTask.id} "${currentTask.title}" успешно завершена.\n\n` +
+         `🚀 Начато выполнение следующей задачи: #${completeResult.nextTask.id} "${completeResult.nextTask.title}"\n` +
+         `Приоритет: ${completeResult.nextTask.priority}\n` +
+         `${completeResult.nextTask.description ? `Описание: ${completeResult.nextTask.description}\n` : ''}` +
+         `\n💡 Контекст для GitHub Copilot готов. Можете запросить помощь по этой задаче.`;
+}
+
+/**
  * Продолжить итерацию с GitHub Copilot (команда "Продолжить")
  * @param {string} command - Исходная команда пользователя (например, 'Продолжить' или 'Продолжить итерацию?')
  * @returns {Promise<object>} - Результат продолжения от Copilot. Возвращает объект с success, message и data (ответ Copilot).
@@ -171,18 +209,60 @@ function processCommand(command) {
 async function continueCopilotIteration(command) {
   try {
     const copilot = require('./copilot');
+    const next = require('./next');
+    const complete = require('./complete');
+    
+    // Получаем текущую активную задачу
+    const currentTask = next.getCurrentTask();
+    
+    // Если есть активная задача, завершаем её
+    if (currentTask) {
+      console.log(chalk.yellow(`Завершаем текущую задачу #${currentTask.id}: "${currentTask.title}"`));
+      
+      // Завершаем текущую задачу
+      const completeResult = await complete.completeTask(currentTask.id.toString());
+      
+      if (!completeResult.success) {
+        return {
+          success: false,
+          message: `Не удалось завершить текущую задачу: ${completeResult.message}`
+        };
+      }
+      
+      console.log(chalk.green(`✓ Задача #${currentTask.id} успешно завершена`));
+    }
+    
+    // Начинаем следующую задачу
+    const nextTaskResult = next.startNextTask(true); // true означает автоматический выбор следующей задачи
+    
+    if (!nextTaskResult.success) {
+      return {
+        success: false,
+        message: `Не удалось начать следующую задачу: ${nextTaskResult.message}`
+      };
+    }
+    
+    console.log(chalk.green(`✓ Начата новая задача #${nextTaskResult.task.id}: "${nextTaskResult.task.title}"`));
+    
     // Можно извлечь дополнительный промпт из команды, если нужно
     const prompt = command.replace(/(продолжить( итерацию)?|continue( to iterate)?)/i, '').trim();
+    
+    // Получаем продолжение от Copilot для новой задачи
     const result = await copilot.getCopilotContinuation(prompt);
+    
     return {
       success: true,
-      message: 'Продолжение от GitHub Copilot:',
-      data: result
+      message: `Переход к следующей задаче #${nextTaskResult.task.id} "${nextTaskResult.task.title}" выполнен. Продолжение от GitHub Copilot:`,
+      data: result,
+      taskTransition: {
+        previousTask: currentTask,
+        nextTask: nextTaskResult.task
+      }
     };
   } catch (error) {
     return {
       success: false,
-      message: `Ошибка при получении продолжения от Copilot: ${error.message}`
+      message: `Ошибка при переходе к следующей задаче: ${error.message}`
     };
   }
 }

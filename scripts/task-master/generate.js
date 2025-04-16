@@ -234,6 +234,85 @@ function generateTasks() {
   
   console.log(chalk.bold('\n📝 Генерация задач из описания\n'));
   
+  // --- ПАТЧ: поддержка пакетного и одиночного режима через аргумент ---
+  const args = process.argv.slice(2);
+  if (args.length > 0) {
+    const input = args.join(' ');
+    if (input.includes('###')) {
+      // Пакетный режим через аргумент
+      const taskDescriptions = input.split(/###/).map(desc => desc.trim()).filter(desc => desc);
+      if (taskDescriptions.length === 0) {
+        console.log(chalk.yellow('Не удалось определить задачи в описании. Убедитесь, что вы разделяете задачи символами "###"'));
+        process.exit(1);
+      }
+      const createdTasks = [];
+      for (const taskDesc of taskDescriptions) {
+        const lines = taskDesc.split('\n').filter(line => line.trim() !== '');
+        if (lines.length === 0) continue;
+        const title = lines[0].trim();
+        const subtasksLines = lines.slice(1).filter(line => line.trim().match(/^[\-\*]\s+/));
+        const taskId = getNextTaskId(tasksData.tasks);
+        const subtasks = subtasksLines.map((line, index) => ({
+          id: `${taskId}.${index + 1}`,
+          title: line.trim().replace(/^[\-\*]\s+/, ''),
+          status: 'pending'
+        }));
+        const descLines = lines.slice(1).filter(line => !line.trim().match(/^[\-\*]\s+/));
+        const taskDescription = descLines.join('\n').trim() || 'Нет описания';
+        const newTask = {
+          id: taskId,
+          title,
+          description: taskDescription,
+          status: 'pending',
+          priority: 2,
+          subtasks,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        tasksData.tasks.push(newTask);
+        createdTasks.push(newTask);
+      }
+      if (createdTasks.length === 0) {
+        console.log(chalk.yellow('Не удалось создать задачи. Проверьте формат ввода.'));
+        process.exit(1);
+      }
+      // Приоритет через аргумент не поддержан, по умолчанию 2
+      if (saveTasks(tasksData)) {
+        console.log(chalk.green(`\n✓ Создано задач: ${createdTasks.length}`));
+        createdTasks.forEach(task => {
+          console.log(chalk.bold(`\n[${task.id}] ${task.title}`));
+          console.log(chalk.dim(`  Приоритет: ${task.priority}`));
+          if (task.subtasks.length > 0) {
+            console.log(chalk.dim(`  Подзадач: ${task.subtasks.length}`));
+            task.subtasks.forEach(subtask => {
+              console.log(chalk.dim(`    - ${subtask.title}`));
+            });
+          }
+        });
+        console.log(chalk.green('\n✓ Генерация задач завершена!'));
+        console.log(chalk.blue('Используйте npm run task-master:list для просмотра всех задач.'));
+        process.exit(0);
+      } else {
+        process.exit(1);
+      }
+    } else {
+      // Одиночная задача через аргумент
+      const newTask = generateTaskFromDescription(input, tasksData);
+      tasksData.tasks.push(newTask);
+      if (saveTasks(tasksData)) {
+        console.log(chalk.green(`\n✓ Задача #${newTask.id} "${newTask.title}" успешно создана!`));
+        console.log(chalk.dim(`  Приоритет: ${newTask.priority}`));
+        console.log(chalk.dim(`  Подзадач: ${newTask.subtasks.length}`));
+        console.log(chalk.green('\n✓ Генерация задач завершена!'));
+        console.log(chalk.blue('Используйте npm run task-master:list для просмотра всех задач.'));
+        process.exit(0);
+      } else {
+        process.exit(1);
+      }
+    }
+  }
+  // --- КОНЕЦ ПАТЧА ---
+  
   // Спрашиваем режим работы
   rl.question(chalk.blue('Выберите режим работы:\n1 - Создать одну задачу\n2 - Создать несколько задач\nВыбор (1/2): '), (choice) => {
     if (choice === '2') {

@@ -51,6 +51,49 @@ function createTasksFile() {
   }
 }
 
+// Функция создания файла COPILOT-INTEGRATION.md с инструкциями для Copilot
+function createCopilotIntegrationFile() {
+  const copilotFile = path.join(currentDir, 'COPILOT-INTEGRATION.md');
+  if (!fs.existsSync(copilotFile)) {
+    const content = `# Task Master: Интеграция с GitHub Copilot
+
+Task Master предоставляет расширенные возможности для совместной работы с GitHub Copilot. Этот документ объясняет, как эффективно использовать Task Master в сочетании с Copilot для автоматизации процесса планирования и отслеживания задач.
+
+## Основные сценарии использования
+
+### 1. Автоматическое создание задач из обсуждения
+
+GitHub Copilot может автоматически анализировать обсуждение проекта и создавать соответствующие задачи в Task Master. После обсуждения плана разработки, просто попросите Copilot создать список задач:
+
+\`\`\`
+Создай список задач из нашего обсуждения
+\`\`\`
+
+или
+
+\`\`\`
+Сгенерируй задачи из плана
+\`\`\`
+
+**Важно!** Для изменения статуса задач (например, отметки задачи как выполненной) всегда используйте соответствующий npm-скрипт:
+
+\`\`\`
+npm run task-master:complete <id>
+\`\`\`
+
+Где <id> — номер задачи (например, 1 или 1.2).
+
+**Нельзя изменять файл tasks.json вручную!** Это может привести к ошибкам и рассинхронизации состояния задач.
+
+Больше примеров и подробностей — в основном README или документации проекта.
+`;
+    fs.writeFileSync(copilotFile, content);
+    console.log(chalk.green(`✓ Создан файл COPILOT-INTEGRATION.md с инструкциями для Copilot`));
+  } else {
+    console.log(chalk.yellow(`⚠ Файл COPILOT-INTEGRATION.md уже существует в корне проекта`));
+  }
+}
+
 // Функция для создания глобальной директории
 function setupGlobalDir() {
   if (!fs.existsSync(globalTasksDir)) {
@@ -69,6 +112,7 @@ function init() {
   // Создаем структуру в текущем проекте
   createTasksDir();
   createTasksFile();
+  createCopilotIntegrationFile();
   
   console.log(chalk.green('\n✓ Task Master инициализирован успешно в текущем проекте!'));
   
