@@ -1,6 +1,6 @@
 # Task Master
 
-![Версия](https://img.shields.io/badge/version-1.0.0-blue.svg)
+![Версия](https://img.shields.io/badge/version-1.3.0-blue.svg)
 ![Лицензия](https://img.shields.io/badge/license-MIT-green.svg)
 
 Task Master - это система управления задачами для разработки проекта, работающая локально без внешних API. Позволяет эффективно управлять задачами проекта с помощью CLI и интеграции с GitHub Copilot.
