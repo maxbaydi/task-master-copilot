@@ -8,6 +8,7 @@
 const fs = require('fs');
 const path = require('path');
 const chalk = require('chalk');
+const contextTracker = require('./context-tracker');
 
 // Определяем пути в зависимости от режима (локальный или глобальный)
 const isGlobalMode = process.env.TASK_MASTER_MODE === 'global';
@@ -55,6 +56,16 @@ function processCommand(command) {
   // Приведение к нижнему регистру для упрощения проверки
   const lowerCommand = command.toLowerCase();
   
+  // Обработка команды Продолжить
+  if (
+    lowerCommand.startsWith('продолжить') ||
+    lowerCommand.includes('продолжить итерацию') ||
+    lowerCommand.startsWith('continue') ||
+    lowerCommand.includes('continue to iterate')
+  ) {
+    return continueCopilotIteration(command);
+  }
+  
   // Обработка команды создания задачи
   if (lowerCommand.startsWith('создай задачу')) {
     return createTaskFromChat(command);
@@ -94,14 +105,268 @@ function processCommand(command) {
     return generateTasksFromPlan(command);
   }
   
-  // Обработка команды вывода справки
-  if (lowerCommand.includes('помощь') || lowerCommand.includes('справка') || 
-      lowerCommand.includes('как использовать') || lowerCommand.includes('инструкция')) {
-    return showHelp();
+  // Обработка команд контекста
+  if (lowerCommand.startsWith('обнови контекст')) {
+    const taskIdRegex = /обнови контекст задачи (\d+)/i;
+    const taskMatch = command.match(taskIdRegex);
+    
+    if (taskMatch) {
+      return updateTaskContext(parseInt(taskMatch[1]));
+    } else {
+      return updateCurrentContext();
+    }
   }
   
-  // Если команда не распознана
-  return `Я не понял команду. Введите "справка" для получения списка доступных команд.`;
+  // Обработка команды предложения задачи
+  if (lowerCommand.includes('предложи задачу') || 
+      lowerCommand.includes('что дальше') || 
+      lowerCommand.includes('какую задачу выполнить следующей')) {
+    return suggestNextTask();
+  }
+  
+  // Обработка команды проверки завершения задачи
+  const checkCompletionRegex = /задача (\d+(?:\.\d+)?) выполнена\?/i;
+  const checkCompletionMatch = command.match(checkCompletionRegex);
+  if (checkCompletionMatch) {
+    return checkTaskCompletion(checkCompletionMatch[1]);
+  }
+  
+  // Обработка запроса на получение контекста для GitHub Copilot
+  if (lowerCommand.includes('получи контекст для copilot') || 
+      lowerCommand.includes('подготовь контекст для copilot') ||
+      lowerCommand.includes('обнови контекст для copilot')) {
+    
+    const taskIdRegex = /контекст для copilot .*?задач[иа]? (\d+)/i;
+    const taskMatch = command.match(taskIdRegex);
+    
+    if (taskMatch) {
+      return prepareCopilotContext(parseInt(taskMatch[1]));
+    } else {
+      return prepareCopilotContext();
+    }
+  }
+  
+  // Если не распознали команду
+  return {
+    success: false,
+    message: 'Команда не распознана. Используйте одну из следующих команд:\n' +
+      '- создай задачу [название]\n' +
+      '- покажи список задач\n' +
+      '- отметь задачу [id] как выполненную\n' +
+      '- дай следующую задачу\n' +
+      '- обнови контекст задачи [id]\n' +
+      '- предложи задачу\n' +
+      '- получи контекст для copilot [для задачи id]'
+  };
+}
+
+/**
+ * Продолжить итерацию с GitHub Copilot (команда "Продолжить")
+ * @param {string} command - Исходная команда пользователя (например, 'Продолжить' или 'Продолжить итерацию?')
+ * @returns {Promise<object>} - Результат продолжения от Copilot. Возвращает объект с success, message и data (ответ Copilot).
+ *
+ * Пример использования:
+ *   processCommand('Продолжить итерацию?')
+ */
+async function continueCopilotIteration(command) {
+  try {
+    const copilot = require('./copilot');
+    // Можно извлечь дополнительный промпт из команды, если нужно
+    const prompt = command.replace(/(продолжить( итерацию)?|continue( to iterate)?)/i, '').trim();
+    const result = await copilot.getCopilotContinuation(prompt);
+    return {
+      success: true,
+      message: 'Продолжение от GitHub Copilot:',
+      data: result
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Ошибка при получении продолжения от Copilot: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Подготовить контекст для GitHub Copilot
+ * 
+ * @param {number} taskId - ID задачи (опционально)
+ * @returns {object} - Результат операции
+ */
+function prepareCopilotContext(taskId) {
+  try {
+    const context = require('./context');
+    const copilotContext = context.prepareCopilotContext(taskId);
+    
+    if (copilotContext) {
+      return {
+        success: true,
+        message: taskId 
+          ? `Контекст для GitHub Copilot создан для задачи #${taskId}` 
+          : 'Контекст для GitHub Copilot успешно создан',
+        data: { copilotContext }
+      };
+    } else {
+      return {
+        success: false,
+        message: 'Не удалось создать контекст для GitHub Copilot'
+      };
+    }
+  } catch (error) {
+    return {
+      success: false,
+      message: `Ошибка при создании контекста для GitHub Copilot: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Предложить следующую задачу для выполнения
+ * 
+ * @returns {object} - Результат операции
+ */
+function suggestNextTask() {
+  try {
+    const context = require('./context');
+    const suggestion = context.suggestTaskAndPrepareContext();
+    
+    if (suggestion) {
+      return {
+        success: true,
+        message: suggestion.message,
+        data: suggestion
+      };
+    } else {
+      return {
+        success: false,
+        message: 'Нет подходящих задач для предложения'
+      };
+    }
+  } catch (error) {
+    return {
+      success: false,
+      message: `Ошибка при предложении задачи: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Обновить контекст для текущей активной задачи
+ * 
+ * @returns {object} - Результат операции
+ */
+function updateCurrentContext() {
+  const currentContext = contextTracker.getCurrentContext();
+  if (!currentContext || !currentContext.activeTask) {
+    return {
+      success: false,
+      message: 'Нет активной задачи для обновления контекста'
+    };
+  }
+  
+  return updateTaskContext(currentContext.activeTask);
+}
+
+/**
+ * Обновить контекст для указанной задачи
+ * 
+ * @param {number} taskId - ID задачи
+ * @returns {object} - Результат операции
+ */
+function updateTaskContext(taskId) {
+  try {
+    const context = require('./context');
+    const result = context.checkAndUpdateCopilotContext(taskId);
+    
+    return {
+      success: result,
+      message: result 
+        ? `Контекст для задачи #${taskId} успешно обновлен` 
+        : `Не удалось обновить контекст для задачи #${taskId}`
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Ошибка при обновлении контекста: ${error.message}`
+    };
+  }
+}
+
+/**
+ * Проверка статуса завершения задачи
+ * 
+ * @param {string} taskId - ID задачи, может содержать точку для подзадачи
+ * @returns {object} - Результат операции со статусом задачи
+ */
+function checkTaskCompletion(taskId) {
+  try {
+    const tasksData = loadTasks();
+    const parts = taskId.toString().split('.');
+    const mainTaskId = parseInt(parts[0]);
+    
+    const task = tasksData.tasks.find(t => t.id === mainTaskId);
+    if (!task) {
+      return {
+        success: false,
+        message: `Задача с ID ${mainTaskId} не найдена`
+      };
+    }
+    
+    // Проверка статуса основной задачи
+    if (parts.length === 1) {
+      const isDone = task.status === 'done';
+      
+      return {
+        success: true,
+        message: isDone 
+          ? `Задача #${mainTaskId} "${task.title}" отмечена как выполненная` 
+          : `Задача #${mainTaskId} "${task.title}" не отмечена как выполненная. Текущий статус: ${task.status}`,
+        data: {
+          taskId: mainTaskId,
+          title: task.title,
+          status: task.status,
+          isDone
+        }
+      };
+    }
+    
+    // Проверка статуса подзадачи
+    const subtaskId = parseInt(parts[1]);
+    if (!task.subtasks || !Array.isArray(task.subtasks)) {
+      return {
+        success: false,
+        message: `Задача #${mainTaskId} не имеет подзадач`
+      };
+    }
+    
+    const subtask = task.subtasks.find(st => st.id === subtaskId);
+    if (!subtask) {
+      return {
+        success: false,
+        message: `Подзадача с ID ${taskId} не найдена`
+      };
+    }
+    
+    const isDone = subtask.status === 'done';
+    
+    return {
+      success: true,
+      message: isDone 
+        ? `Подзадача #${taskId} "${subtask.title}" отмечена как выполненная` 
+        : `Подзадача #${taskId} "${subtask.title}" не отмечена как выполненная. Текущий статус: ${subtask.status}`,
+      data: {
+        taskId,
+        title: subtask.title,
+        status: subtask.status,
+        isDone
+      }
+    };
+  } catch (error) {
+    return {
+      success: false,
+      message: `Ошибка при проверке статуса задачи: ${error.message}`
+    };
+  }
 }
 
 /**
@@ -260,9 +525,20 @@ function completeTask(taskId) {
     
     // Сохраняем изменения
     if (saveTasks(tasksData)) {
+      // Добавляем запись в историю выполнения и контекст
+      const summary = `Выполнена подзадача ${taskId} "${subtask.title}"`;
+      contextTracker.updateTaskHistory(parentIdNum, 'update', summary);
+
+      if (allSubtasksDone) {
+        contextTracker.updateTaskStatus(parentIdNum, 'done', `Выполнены все подзадачи (${parentTask.subtasks.length})`);
+      }
+      
       let response = `✓ Подзадача #${taskId} отмечена как выполненная`;
       if (allSubtasksDone) {
         response += `\n✓ Все подзадачи выполнены, задача #${parentIdNum} отмечена как выполненная`;
+        response += `\n💡 Контекст задачи обновлен для GitHub Copilot`;
+      } else {
+        response += `\n💡 Контекст подзадачи обновлен для GitHub Copilot`;
       }
       return response;
     } else {
@@ -289,7 +565,11 @@ function completeTask(taskId) {
     
     // Сохраняем изменения
     if (saveTasks(tasksData)) {
-      return `✓ Задача #${taskIdNum} "${task.title}" отмечена как выполненная`;
+      // Обновляем контекст задачи
+      const summary = `Выполнена задача "${task.title}"${task.subtasks.length > 0 ? ` и все её подзадачи (${task.subtasks.length})` : ''}`;
+      contextTracker.updateTaskStatus(taskIdNum, 'done', summary);
+
+      return `✓ Задача #${taskIdNum} "${task.title}" отмечена как выполненная\n💡 Контекст задачи обновлен для GitHub Copilot`;
     } else {
       return '✗ Не удалось сохранить изменения';
     }
@@ -324,6 +604,9 @@ function getNextTask() {
     tasksData.tasks[taskIndex].status = 'in-progress';
     tasksData.tasks[taskIndex].updated_at = new Date().toISOString();
     saveTasks(tasksData);
+    
+    // Обновляем контекст задачи
+    contextTracker.updateTaskStatus(nextTask.id, 'in-progress', `Начато выполнение задачи "${nextTask.title}"`);
   }
   
   // Формирование ответа
@@ -339,543 +622,386 @@ function getNextTask() {
   }
   
   response += '\n✓ Задача отмечена как "в процессе"';
+  response += '\n💡 Контекст задачи обновлен для GitHub Copilot';
   
   return response;
 }
 
 /**
- * Генерация задачи из описания
- * @param {string} command - Команда с описанием задачи
- */
-function generateTaskFromDescription(command) {
-  const tasksData = loadTasks();
-  
-  // Извлекаем описание задачи
-  const description = command.replace(/сгенерируй задачу/i, '').trim();
-  if (!description) {
-    return 'Не указано описание задачи. Используйте формат: "Сгенерируй задачу [описание]"';
-  }
-  
-  // Разбиваем описание на строки
-  const lines = description.split(/\n|\\n/).filter(line => line.trim() !== '');
-  
-  // Первая строка или первые 5 слов будут заголовком
-  let title = '';
-  if (lines.length > 0) {
-    title = lines[0].trim();
-    
-    // Если первая строка слишком длинная, берем только первые 5 слов
-    if (title.split(' ').length > 5) {
-      title = title.split(' ').slice(0, 5).join(' ') + '...';
-    }
-  } else {
-    title = description.split(' ').slice(0, 5).join(' ');
-    if (description.split(' ').length > 5) {
-      title += '...';
-    }
-  }
-  
-  // Определяем подзадачи (строки, начинающиеся с - или * или цифры с точкой)
-  const subtasksRegex = /^(\-|\*|\d+\.)\s+(.+)$/;
-  const subtasksLines = lines.filter(line => subtasksRegex.test(line.trim()));
-  
-  const subtasks = subtasksLines.map((line, index) => {
-    return {
-      id: `${getNextTaskId(tasksData.tasks)}.${index + 1}`,
-      title: line.trim().replace(subtasksRegex, '$2'),
-      status: 'pending'
-    };
-  });
-  
-  // Создаем новую задачу
-  const newTask = {
-    id: getNextTaskId(tasksData.tasks),
-    title,
-    description,
-    status: 'pending',
-    priority: 2, // По умолчанию средний приоритет
-    subtasks,
-    created_at: new Date().toISOString(),
-    updated_at: new Date().toISOString()
-  };
-  
-  // Добавляем задачу в список
-  tasksData.tasks.push(newTask);
-  
-  // Сохраняем задачи в файл
-  if (saveTasks(tasksData)) {
-    let response = `✓ Задача #${newTask.id} "${newTask.title}" успешно создана!\n`;
-    response += `Приоритет: ${newTask.priority}\n`;
-    
-    if (subtasks.length > 0) {
-      response += `Подзадачи:\n`;
-      subtasks.forEach(subtask => {
-        response += `○ ${subtask.id} ${subtask.title}\n`;
-      });
-    }
-    
-    return response;
-  } else {
-    return '✗ Не удалось сохранить задачу.';
-  }
-}
-
-/**
- * Пакетное создание нескольких задач из описания
- * @param {string} command - Команда с описанием задач
+ * Начать выполнение следующей задачи
  * @returns {string} - Результат выполнения команды
  */
-function generateMultipleTasks(command) {
+function startNextTaskExecution() {
+  const result = contextTracker.suggestNextTask();
+  
+  if (!result.hasNextTask) {
+    return `🎉 ${result.message}`;
+  }
+  
+  // Выводим сообщение о начале выполнения задачи и контекст для Copilot
+  return `
+🚀 ${result.message}
+
+💡 Контекст для GitHub Copilot обновлен с учетом текущей задачи и истории проекта.
+Я уже знаю о задаче #${result.nextTask.id} и готов помочь её выполнить.
+Вы можете начать работу, а я буду учитывать контекст проекта в своих ответах.`;
+}
+
+/**
+ * Начать выполнение конкретной задачи
+ * @param {number} taskId - ID задачи для выполнения
+ * @returns {string} - Результат выполнения команды
+ */
+function startTaskExecution(taskId) {
   const tasksData = loadTasks();
   
-  // Извлекаем описание задач
-  let description = command.replace(/создай задачи|сгенерируй задачи/i, '').trim();
-  if (!description) {
-    return 'Не указано описание задач. Используйте формат: "Создай задачи [описание]" и разделяйте задачи с помощью "###"';
+  // Проверяем существование задачи
+  const task = tasksData.tasks.find(t => t.id === taskId);
+  if (!task) {
+    return `❌ Задача с ID ${taskId} не найдена`;
   }
+  
+  // Обновляем статус задачи на "в процессе"
+  task.status = 'in-progress';
+  task.updated_at = new Date().toISOString();
+  
+  // Сохраняем изменения
+  if (!saveTasks(tasksData)) {
+    return '❌ Не удалось обновить статус задачи';
+  }
+  
+  // Обновляем контекст задачи
+  contextTracker.updateTaskStatus(taskId, 'in-progress', `Начато выполнение задачи "${task.title}"`);
+  
+  // Подготавливаем контекст для Copilot
+  const copilotContext = contextTracker.prepareTaskContextForCopilot(taskId);
+  
+  // Формируем сообщение с информацией о задаче
+  let response = `
+🚀 Начинаю выполнение задачи #${taskId}: "${task.title}"
+Приоритет: ${task.priority}
+${task.description ? `\nОписание: ${task.description}` : ''}
 
-  // Разбиваем описание на отдельные задачи с помощью разделителя "###"
-  const taskDescriptions = description.split(/###/).map(desc => desc.trim()).filter(desc => desc);
+${task.subtasks && task.subtasks.length > 0 ? 
+  `Подзадачи:\n${task.subtasks.map(st => `- ${st.id} ${st.title}`).join('\n')}` : ''}
+
+💡 Контекст для GitHub Copilot обновлен. Я уже знаю о задаче #${taskId} и готов помочь её выполнить.
+Вы можете начать работу, а я буду учитывать контекст проекта в своих ответах.`;
   
-  if (taskDescriptions.length === 0) {
-    return 'Не удалось определить задачи в описании. Убедитесь, что вы разделяете задачи символами "###"';
-  }
-  
-  const createdTasks = [];
-  
-  // Обрабатываем каждую задачу отдельно
-  for (const taskDesc of taskDescriptions) {
-    // Разбиваем описание на строки
-    const lines = taskDesc.split(/\n|\\n/).filter(line => line.trim() !== '');
-    
-    if (lines.length === 0) continue;
-    
-    // Первая строка будет заголовком
-    const title = lines[0].trim();
-    
-    // Проверяем наличие приоритета в заголовке или в отдельной строке
-    let priority = 2; // По умолчанию средний приоритет
-    const priorityRegex = /\[(?:P|p|приоритет|Приоритет)[:=]?\s*([1-3])\]/;
-    
-    // Проверяем заголовок на наличие приоритета
-    const titlePriorityMatch = title.match(priorityRegex);
-    let cleanTitle = title;
-    
-    if (titlePriorityMatch) {
-      priority = parseInt(titlePriorityMatch[1]);
-      cleanTitle = title.replace(priorityRegex, '').trim();
-    } else {
-      // Проверяем другие строки на наличие приоритета
-      for (const line of lines.slice(1)) {
-        const linePriorityMatch = line.match(priorityRegex);
-        if (linePriorityMatch) {
-          priority = parseInt(linePriorityMatch[1]);
-          break;
-        }
-      }
-    }
-    
-    // Определяем подзадачи (строки, начинающиеся с - или * или цифры с точкой)
-    const subtasksRegex = /^(\-|\*|\d+\.)\s+(.+)$/;
-    const subtasksLines = lines.slice(1).filter(line => subtasksRegex.test(line.trim()));
-    
-    const taskId = getNextTaskId(tasksData.tasks);
-    
-    const subtasks = subtasksLines.map((line, index) => {
-      return {
-        id: `${taskId}.${index + 1}`,
-        title: line.trim().replace(subtasksRegex, '$2'),
-        status: 'pending'
-      };
-    });
-    
-    // Получаем описание, исключая подзадачи и строки с приоритетом
-    const taskDescription = lines.slice(1)
-      .filter(line => !subtasksRegex.test(line.trim()) && !priorityRegex.test(line.trim()))
-      .join('\n').trim() || 'Задача создана через чат';
-    
-    // Создаем новую задачу
-    const newTask = {
-      id: taskId,
-      title: cleanTitle,
-      description: taskDescription,
-      status: 'pending',
-      priority: priority,
-      subtasks,
-      created_at: new Date().toISOString(),
-      updated_at: new Date().toISOString()
-    };
-    
-    // Добавляем задачу в список
-    tasksData.tasks.push(newTask);
-    createdTasks.push(newTask);
-  }
-  
-  // Если ни одной задачи не создано
-  if (createdTasks.length === 0) {
-    return 'Не удалось создать задачи. Проверьте формат ввода.';
-  }
-  
-  // Сохраняем задачи в файл
-  if (saveTasks(tasksData)) {
-    // Формируем улучшенный вывод с использованием emoji и форматирования
-    let response = `✅ Успешно создано задач: ${createdTasks.length}\n\n`;
-    
-    createdTasks.forEach(task => {
-      // Emoji для приоритета
-      let priorityEmoji = '';
-      switch(task.priority) {
-        case 1: priorityEmoji = '🔴'; break; // Высокий
-        case 2: priorityEmoji = '🟡'; break; // Средний
-        case 3: priorityEmoji = '🟢'; break; // Низкий
-      }
-      
-      response += `${priorityEmoji} [${task.id}] ${task.title}\n`;
-      
-      // Добавляем описание, если оно не пустое и не равно заголовку
-      if (task.description && task.description !== 'Задача создана через чат' && task.description !== task.title) {
-        // Ограничиваем длину описания для вывода
-        const shortDesc = task.description.length > 100 
-          ? task.description.substring(0, 100) + '...' 
-          : task.description;
-        response += `📝 ${shortDesc}\n`;
-      }
-      
-      // Добавляем информацию о приоритете
-      const priorityText = task.priority === 1 ? 'Высокий' : (task.priority === 2 ? 'Средний' : 'Низкий');
-      response += `⚡ Приоритет: ${priorityText}\n`;
-      
-      if (task.subtasks.length > 0) {
-        response += `📋 Подзадачи (${task.subtasks.length}):\n`;
-        task.subtasks.forEach(subtask => {
-          response += `  ○ ${subtask.id} ${subtask.title}\n`;
-        });
-      }
-      response += '\n';
-    });
-    
-    return response;
-  } else {
-    return '❌ Не удалось сохранить задачи.';
-  }
+  return response;
 }
 
 /**
- * Показать справку по использованию Task Master
- * @returns {string} - Текст справки
- */
-function showHelp() {
-  return `📚 СПРАВКА ПО ИСПОЛЬЗОВАНИЮ TASK MASTER 📚
-
-🔹 ОСНОВНЫЕ КОМАНДЫ:
-
-✅ Создание задач:
-  - "Создай задачу [название]" - создание одной задачи
-  - "Создай задачи [описание]" - создание нескольких задач
-  - "Сгенерируй задачу [описание]" - генерация задачи из описания
-  - "Сгенерируй задачи [описание]" - генерация нескольких задач из описания
-  - "Создай список задач из плана" - автоматическое создание задач из обсуждения
-
-✅ Управление задачами:
-  - "Покажи список задач" или "Покажи задачи" - просмотр всех задач
-  - "Отметь задачу X как выполненную" - отметка задачи как выполненной
-  - "Дай следующую задачу" - получение следующей задачи
-
-🔹 ФОРМАТИРОВАНИЕ ОПИСАНИЯ ЗАДАЧ:
-
-✅ Для создания нескольких задач:
-  - Разделяйте задачи символами "###"
-  - Первая строка каждой задачи становится её заголовком
-  - Строки, начинающиеся с "-" или "*", считаются подзадачами
-
-✅ Для указания приоритета:
-  - Добавьте метку [приоритет:X] или [P:X], где X - число от 1 до 3:
-    1 - высокий приоритет 🔴
-    2 - средний приоритет 🟡 (по умолчанию)
-    3 - низкий приоритет 🟢
-
-🔹 ПРИМЕРЫ:
-
-✅ Создание одной задачи с подзадачами:
-  Сгенерируй задачу Разработка интерфейса входа
-  Создать форму авторизации с полями логин и пароль
-  - Создать HTML разметку формы входа
-  - Реализовать валидацию полей
-  - Добавить обработку ошибок авторизации
-  [Приоритет:1]
-
-✅ Создание нескольких задач:
-  Создай задачи Настройка проекта [P:1]
-  - Создать репозиторий
-  - Настроить окружение разработки
-  - Установить необходимые зависимости
-  
-  ###
-  
-  Разработка API [приоритет:2]
-  - Создать модели данных
-  - Реализовать CRUD операции
-  - Написать тесты для API
-  
-  ###
-  
-  Документация [P:3]
-  - Описать API
-  - Подготовить руководство пользователя
-
-✅ Автоматическое создание задач из плана:
-  Создай список задач из плана
-  (Система проанализирует ваше предыдущее обсуждение и создаст список задач)
-`;
-}
-
-/**
- * Генерация задач из обсуждения плана
- * @param {string} command - Команда
+ * Обновление контекста задачи
+ * @param {number} taskId - ID задачи для обновления контекста
+ * @param {string} comment - Комментарий для добавления в контекст
  * @returns {string} - Результат выполнения команды
+ */
+function updateTaskContext(taskId, comment) {
+  const tasksData = loadTasks();
+  
+  // Проверяем существование задачи
+  const task = tasksData.tasks.find(t => t.id === taskId);
+  if (!task) {
+    return `❌ Задача с ID ${taskId} не найдена`;
+  }
+  
+  // Обновляем контекст задачи
+  const success = contextTracker.addHistoryEntry(taskId, 'update', comment);
+  
+  if (!success) {
+    return '❌ Не удалось обновить контекст задачи';
+  }
+  
+  // Подготавливаем обновленный контекст для Copilot
+  const copilotContext = contextTracker.prepareTaskContextForCopilot(taskId);
+  
+  return `
+✅ Контекст задачи #${taskId} обновлен: ${comment}
+
+💡 GitHub Copilot теперь учитывает обновленный контекст задачи в своих рекомендациях.`;
+}
+
+/**
+ * Обновление общего контекста проекта
+ * @param {string} comment - Комментарий для добавления в общий контекст
+ * @returns {string} - Результат выполнения команды
+ */
+function updateGeneralContext(comment) {
+  if (!comment) {
+    return '❌ Пустой комментарий для обновления контекста';
+  }
+  
+  const context = contextTracker.loadContext();
+  if (!context) {
+    return '❌ Не удалось загрузить контекст проекта';
+  }
+  
+  // Обновляем общий контекст проекта
+  context.projectState = comment;
+  context.lastUpdated = new Date().toISOString();
+  
+  const success = contextTracker.saveContext(context);
+  
+  if (!success) {
+    return '❌ Не удалось обновить общий контекст проекта';
+  }
+  
+  return `
+✅ Общий контекст проекта обновлен: ${comment}
+
+💡 GitHub Copilot теперь учитывает обновленный контекст проекта в своих рекомендациях.`;
+}
+
+/**
+ * Показать контекст задачи
+ * @param {number} taskId - ID задачи для отображения контекста
+ * @returns {string} - Контекст задачи
+ */
+function showTaskContext(taskId) {
+  const copilotContext = contextTracker.prepareTaskContextForCopilot(taskId);
+  
+  if (!copilotContext || copilotContext.includes('не найдена') || copilotContext.includes('Не удалось')) {
+    return `❌ Не удалось получить контекст для задачи #${taskId}`;
+  }
+  
+  return `
+📝 Контекст задачи #${taskId} для GitHub Copilot:
+
+${copilotContext}
+
+Этот контекст автоматически используется GitHub Copilot при работе с кодом.`;
+}
+
+/**
+ * Показать общий контекст проекта
+ * @returns {string} - Общий контекст проекта
+ */
+function showGeneralContext() {
+  const context = contextTracker.loadContext();
+  if (!context) {
+    return '❌ Не удалось загрузить контекст проекта';
+  }
+  
+  const summary = contextTracker.getProjectSummary();
+  
+  return `
+📝 Общий контекст проекта для GitHub Copilot:
+
+${summary}
+
+Проектное состояние: ${context.projectState}
+Последнее обновление: ${new Date(context.lastUpdated).toLocaleString()}
+
+Этот контекст автоматически используется GitHub Copilot при работе с кодом.`;
+}
+
+/**
+ * Проверка на завершение задачи и предложение перейти к следующей 
+ * @param {number} taskId - ID проверяемой задачи
+ * @returns {string} - Сообщение с предложением
+ */
+function checkTaskCompletionAndSuggestNext(taskId) {
+  const tasksData = loadTasks();
+  
+  // Проверяем существование задачи
+  const task = tasksData.tasks.find(t => t.id === taskId);
+  if (!task) {
+    return `❌ Задача с ID ${taskId} не найдена`;
+  }
+  
+  // Если задача уже выполнена, предлагаем следующую
+  if (task.status === 'done') {
+    return `
+✅ Задача #${taskId} "${task.title}" уже отмечена как выполненная.
+
+${startNextTaskExecution()}`;
+  }
+  
+  // Если задача в процессе, предлагаем отметить её как выполненную
+  const prompt = contextTracker.generateTaskCompletionPrompt(taskId);
+  
+  return `
+⚙️ Задача #${taskId} "${task.title}" в процессе выполнения.
+
+${prompt}
+
+Ответьте "Да, задача выполнена" чтобы отметить задачу как выполненную и перейти к следующей.
+Или продолжите работу над текущей задачей.`;
+}
+
+/**
+ * Показать историю выполнения задачи
+ * @param {number} taskId - ID задачи
+ * @returns {string} - История выполнения задачи
+ */
+function showTaskHistory(taskId) {
+  const history = contextTracker.getFormattedTaskHistory(taskId);
+  
+  return `
+📜 ${history}
+
+Эта история автоматически учитывается GitHub Copilot при работе с кодом.`;
+}
+
+/**
+ * Показать историю выполнения всех задач
+ * @returns {string} - История выполнения всех задач
+ */
+function showAllTasksHistory() {
+  const history = contextTracker.getFormattedFullHistory();
+  
+  return `
+📜 ${history}
+
+Эта история автоматически учитывается GitHub Copilot при работе с кодом.`;
+}
+
+/**
+ * Генерация задач из плана или обсуждения
+ * @param {string} command - Команда с описанием плана
+ * @returns {string} - Результат генерации задач
  */
 function generateTasksFromPlan(command) {
-  // Мы предполагаем, что обсуждение плана уже произошло в чате
-  // Эта функция анализирует текст команды и извлекает задачи
+  // Извлекаем план из текста команды
+  const planTextRegex = /создай (?:список )?задач(и)? из (?:плана|нашего обсуждения)(?:\s*[:：]\s*|\s+)(.*)/is;
+  const match = command.match(planTextRegex);
   
-  // Очищаем команду от ключевых слов
-  const cleanCommand = command.replace(/создай список задач из плана|сгенерируй задачи из плана|создай задачи из нашего обсуждения/i, '').trim();
+  let planText = '';
+  if (match && match[2]) {
+    planText = match[2].trim();
+  } else {
+    // Если не удалось извлечь план, берем весь текст после команды
+    planText = command.replace(/создай (?:список )?задач(?:и)? из (?:плана|нашего обсуждения)/i, '').trim();
+  }
   
-  // Если пользователь предоставил контекст вместе с командой, используем его
-  // В противном случае, мы бы использовали историю чата, но в данной реализации
-  // мы просто предложим стандартный набор задач для проекта
+  if (!planText) {
+    return '❌ Не удалось извлечь план из команды. Пожалуйста, уточните план задач.';
+  }
   
+  // Разбиваем план на отдельные пункты (предполагаем, что каждый пункт - отдельная задача)
+  const taskLines = planText
+    .split(/\n+|\\n+/) // Разделение по переносам строк
+    .map(line => line.trim())
+    .filter(line => line.length > 0 && !line.match(/^[#\-\*]+\s*$/)); // Фильтрация пустых строк и разделителей
+  
+  // Пытаемся определить, разбит ли план на пункты или подпункты
+  const bulletPointRegex = /^([#*\-\d]+[\.\)]*\s+|[\d]+[\.\)]+\s+)/;
+  const hasBulletPoints = taskLines.some(line => bulletPointRegex.test(line));
+  
+  // Создаем список задач
   const tasksData = loadTasks();
-  const createdTasks = [];
+  const newTasks = [];
   
-  if (cleanCommand) {
-    // Если есть текст после команды, анализируем его для создания задач
+  if (hasBulletPoints) {
+    // Обрабатываем пункты плана как отдельные задачи
+    let currentTask = null;
+    let currentSubtasks = [];
     
-    // Разбиваем текст на абзацы
-    const paragraphs = cleanCommand.split(/\n\n|\r\n\r\n/).filter(p => p.trim());
+    // Определяем уровень отступа для каждой строки
+    const getIndentLevel = (line) => {
+      const match = line.match(/^(\s*)/);
+      return match ? match[1].length : 0;
+    };
     
-    // Анализируем каждый абзац как потенциальную задачу
-    for (let i = 0; i < paragraphs.length; i++) {
-      const paragraph = paragraphs[i].trim();
-      
-      // Разбиваем абзац на строки
-      const lines = paragraph.split(/\n|\r\n/).filter(line => line.trim());
-      
-      if (lines.length === 0) continue;
-      
-      // Первая строка как заголовок задачи
-      const title = lines[0].trim();
-      
-      // Определяем приоритет задачи (эвристика: первые задачи имеют более высокий приоритет)
-      let priority = Math.min(Math.max(Math.ceil((i + 1) / 3), 1), 3);
-      
-      // Ищем в тексте ключевые слова для оценки приоритета
-      const lowPriorityKeywords = ["опционально", "дополнительно", "низкий приоритет", "потом", "в будущем"];
-      const highPriorityKeywords = ["важно", "критично", "срочно", "высокий приоритет", "необходимо", "обязательно"];
-      
-      const lowerParagraph = paragraph.toLowerCase();
-      
-      if (lowPriorityKeywords.some(keyword => lowerParagraph.includes(keyword))) {
-        priority = 3; // Низкий приоритет
-      } else if (highPriorityKeywords.some(keyword => lowerParagraph.includes(keyword))) {
-        priority = 1; // Высокий приоритет
-      }
-      
-      // Ищем потенциальные подзадачи, выделяя маркеры списков или номерацию
-      // Также ищем предложения, которые могут описывать конкретные действия
-      const subtaskRegex = /^[\-\*]\s+(.+)$/;
-      const actionSentenceRegex = /([А-Я][^.!?]*?(?:создать|разработать|реализовать|добавить|написать|тестировать|внедрить|установить)[^.!?]*[.!?])/g;
-      
-      const explicitSubtasks = lines.slice(1)
-        .filter(line => subtaskRegex.test(line.trim()))
-        .map(line => line.trim().replace(subtaskRegex, '$1'));
-      
-      const actionSentences = [];
-      let match;
-      
-      // Ищем предложения, описывающие действия
-      while ((match = actionSentenceRegex.exec(paragraph)) !== null) {
-        actionSentences.push(match[1].trim());
-      }
-      
-      // Объединяем явные подзадачи и предложения, описывающие действия
-      const allSubtasks = [...explicitSubtasks];
-      
-      // Добавляем предложения-действия, которые не содержатся в явных подзадачах
-      actionSentences.forEach(sentence => {
-        const sentenceLower = sentence.toLowerCase();
-        if (!allSubtasks.some(subtask => 
-            subtask.toLowerCase().includes(sentenceLower) || 
-            sentenceLower.includes(subtask.toLowerCase()))) {
-          allSubtasks.push(sentence);
+    const lines = taskLines.map(line => ({
+      text: line.replace(bulletPointRegex, '').trim(),
+      indent: getIndentLevel(line),
+      hasBullet: bulletPointRegex.test(line)
+    }));
+    
+    // Определяем минимальный отступ для задач первого уровня
+    const baseIndentLevel = lines.filter(l => l.hasBullet).reduce((min, l) => Math.min(min, l.indent), Infinity);
+    
+    // Проходим по строкам и группируем их в задачи и подзадачи
+    for (const line of lines) {
+      if (line.hasBullet && (line.indent === baseIndentLevel || currentTask === null)) {
+        // Если это новая задача первого уровня
+        if (currentTask !== null) {
+          // Сохраняем предыдущую задачу
+          newTasks.push({
+            ...currentTask,
+            subtasks: currentSubtasks
+          });
         }
+        
+        // Создаем новую задачу
+        currentTask = {
+          id: getNextTaskId(tasksData.tasks),
+          title: line.text,
+          description: `Задача создана из плана: ${line.text}`,
+          status: 'pending',
+          priority: 2,
+          created_at: new Date().toISOString(),
+          updated_at: new Date().toISOString()
+        };
+        currentSubtasks = [];
+      } else if (line.hasBullet && currentTask !== null) {
+        // Если это подзадача
+        currentSubtasks.push({
+          id: `${currentTask.id}.${currentSubtasks.length + 1}`,
+          title: line.text,
+          status: 'pending'
+        });
+      } else if (currentTask !== null) {
+        // Если это дополнительное описание для текущей задачи
+        currentTask.description += '\n' + line.text;
+      }
+    }
+    
+    // Добавляем последнюю задачу
+    if (currentTask !== null) {
+      newTasks.push({
+        ...currentTask,
+        subtasks: currentSubtasks
       });
+    }
+  } else {
+    // Если пункты не выделены, создаем отдельную задачу для каждой строки
+    taskLines.forEach((line, index) => {
+      const taskId = getNextTaskId(tasksData.tasks) + index;
       
-      // Создаем и добавляем задачу
-      const taskId = getNextTaskId(tasksData.tasks);
-      
-      const subtasks = allSubtasks.map((subtaskTitle, index) => ({
-        id: `${taskId}.${index + 1}`,
-        title: subtaskTitle,
-        status: 'pending'
-      }));
-      
-      const taskDescription = lines.slice(1)
-        .filter(line => !subtaskRegex.test(line.trim()))
-        .join('\n').trim() || 'Задача создана на основе обсуждения плана';
-      
-      const newTask = {
+      newTasks.push({
         id: taskId,
-        title,
-        description: taskDescription,
+        title: line,
+        description: `Задача создана из плана: ${line}`,
         status: 'pending',
-        priority,
-        subtasks,
+        priority: 2,
+        subtasks: [],
         created_at: new Date().toISOString(),
         updated_at: new Date().toISOString()
-      };
-      
-      tasksData.tasks.push(newTask);
-      createdTasks.push(newTask);
-    }
+      });
+    });
   }
   
-  // Если задачи не созданы из текста команды, создаем стандартные задачи проекта
-  if (createdTasks.length === 0) {
-    // Создаем базовый набор задач для стандартного проекта разработки
-    const defaultTasks = [
-      {
-        title: "Планирование проекта",
-        priority: 1,
-        description: "Определение основных требований и планирование работ по проекту",
-        subtasks: [
-          "Определение требований и целей проекта",
-          "Составление технического задания",
-          "Оценка сроков и ресурсов",
-          "Создание плана работ"
-        ]
-      },
-      {
-        title: "Разработка архитектуры",
-        priority: 1,
-        description: "Разработка архитектуры проекта и выбор технологий",
-        subtasks: [
-          "Выбор технологического стека",
-          "Проектирование структуры базы данных",
-          "Определение API и интерфейсов",
-          "Создание схемы архитектуры"
-        ]
-      },
-      {
-        title: "Настройка окружения разработки",
-        priority: 1,
-        description: "Настройка окружения для разработки и тестирования",
-        subtasks: [
-          "Настройка репозитория кода",
-          "Настройка CI/CD",
-          "Настройка тестового окружения",
-          "Установка необходимых инструментов и зависимостей"
-        ]
-      },
-      {
-        title: "Разработка основного функционала",
-        priority: 2,
-        description: "Разработка основных компонентов и функций проекта",
-        subtasks: [
-          "Разработка моделей данных",
-          "Реализация бизнес-логики",
-          "Разработка пользовательского интерфейса",
-          "Интеграция компонентов"
-        ]
-      },
-      {
-        title: "Тестирование",
-        priority: 2,
-        description: "Тестирование проекта на различных уровнях",
-        subtasks: [
-          "Написание модульных тестов",
-          "Проведение интеграционного тестирования",
-          "Тестирование производительности",
-          "Проведение пользовательского тестирования"
-        ]
-      },
-      {
-        title: "Документация",
-        priority: 3,
-        description: "Создание документации для проекта",
-        subtasks: [
-          "Написание документации по API",
-          "Создание руководства пользователя",
-          "Подготовка документации для разработчиков",
-          "Документирование архитектуры проекта"
-        ]
-      },
-      {
-        title: "Развертывание",
-        priority: 2,
-        description: "Подготовка к выпуску и развертывание проекта",
-        subtasks: [
-          "Настройка продакшн-окружения",
-          "Настройка мониторинга и логирования",
-          "Подготовка скриптов для развертывания",
-          "Тестирование процесса развертывания"
-        ]
-      }
-    ];
-    
-    // Добавляем задачи в систему
-    for (const taskTemplate of defaultTasks) {
-      const taskId = getNextTaskId(tasksData.tasks);
-      
-      const subtasks = taskTemplate.subtasks.map((subtaskTitle, index) => ({
-        id: `${taskId}.${index + 1}`,
-        title: subtaskTitle,
-        status: 'pending'
-      }));
-      
-      const newTask = {
-        id: taskId,
-        title: taskTemplate.title,
-        description: taskTemplate.description,
-        status: 'pending',
-        priority: taskTemplate.priority,
-        subtasks,
-        created_at: new Date().toISOString(),
-        updated_at: new Date().toISOString()
-      };
-      
-      tasksData.tasks.push(newTask);
-      createdTasks.push(newTask);
-    }
+  // Если задачи не удалось сгенерировать
+  if (newTasks.length === 0) {
+    return '❌ Не удалось создать задачи из предоставленного плана. Пожалуйста, уточните план.';
   }
+  
+  // Добавляем новые задачи в список
+  tasksData.tasks = [...tasksData.tasks, ...newTasks];
   
   // Сохраняем задачи в файл
   if (saveTasks(tasksData)) {
     // Формируем ответ
-    let response = `✅ Автоматически создано задач: ${createdTasks.length}\n\n`;
+    let response = `✅ Успешно создано задач из плана: ${newTasks.length}\n\n`;
     
-    createdTasks.forEach(task => {
-      // Emoji для приоритета
-      let priorityEmoji = '';
-      switch(task.priority) {
-        case 1: priorityEmoji = '🔴'; break; // Высокий
-        case 2: priorityEmoji = '🟡'; break; // Средний
-        case 3: priorityEmoji = '🟢'; break; // Низкий
-      }
+    newTasks.forEach(task => {
+      response += `🔹 #${task.id} ${task.title}\n`;
       
-      response += `${priorityEmoji} [${task.id}] ${task.title}\n`;
-      
-      // Добавляем подзадачи
       if (task.subtasks.length > 0) {
-        response += `📋 Подзадачи (${task.subtasks.length}):\n`;
         task.subtasks.forEach(subtask => {
-          response += `  ○ ${subtask.id} ${subtask.title}\n`;
+          response += `  ◦ ${subtask.id} ${subtask.title}\n`;
         });
       }
+      
       response += '\n';
     });
     
-    response += "📌 Задачи успешно созданы и готовы к выполнению. Используйте команду \"Покажи задачи\" для просмотра всего списка задач или \"Дай следующую задачу\" для начала работы.";
+    response += `
+💡 Контекст для GitHub Copilot обновлен с новыми задачами.
+Чтобы начать выполнение, используйте команду "Начни выполнение задач"`;
     
     return response;
   } else {

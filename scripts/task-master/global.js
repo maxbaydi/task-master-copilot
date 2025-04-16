@@ -56,8 +56,9 @@ function showHelp() {
   console.log(`  ${chalk.cyan('list')}                  - Показать список задач`);
   console.log(`  ${chalk.cyan('next')}                  - Получить следующую задачу`);
   console.log(`  ${chalk.cyan('generate')}              - Сгенерировать задачи из описания`);
-  console.log(`  ${chalk.cyan('complete')} <id>         - Отметить задачу как выполненную`);
+  console.log(`  ${chalk.cyan('complete')} <id>         - Отметить задачу как выполненной`);
   console.log(`  ${chalk.cyan('chat')} "команда"        - Выполнить команду через интерфейс чата`);
+  console.log(`  ${chalk.cyan('context')} [команда]     - Работа с контекстом выполнения задач`);
   console.log(`  ${chalk.cyan('help')}                  - Показать эту справку\n`);
   
   console.log(chalk.bold('Команды чата:'));
@@ -105,6 +106,7 @@ function runCommand() {
       'generate': path.join(scriptDir, 'generate.js'),
       'complete': path.join(scriptDir, 'complete.js'),
       'chat': path.join(scriptDir, 'chat.js'),
+      'context': path.join(scriptDir, 'context.js'),
       'help': null // Обрабатываем справку отдельно
     };
     

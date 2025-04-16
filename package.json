@@ -10,7 +10,8 @@
     "task-master-next": "scripts/task-master/next.js",
     "task-master-generate": "scripts/task-master/generate.js",
     "task-master-complete": "scripts/task-master/complete.js",
-    "task-master-chat": "scripts/task-master/chat.js"
+    "task-master-chat": "scripts/task-master/chat.js",
+    "task-master-context": "scripts/task-master/context.js"
   },
   "scripts": {
     "install": "node scripts/task-master/install.js",
@@ -19,7 +20,8 @@
     "task-master:next": "node scripts/task-master/next.js",
     "task-master:generate": "node scripts/task-master/generate.js",
     "task-master:complete": "node scripts/task-master/complete.js",
-    "task-master:chat": "node scripts/task-master/chat.js"
+    "task-master:chat": "node scripts/task-master/chat.js",
+    "task-master:context": "node scripts/task-master/context.js"
   },
   "dependencies": {
     "chalk": "^4.1.2"
