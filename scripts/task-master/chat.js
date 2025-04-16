@@ -489,91 +489,103 @@ function listTasks() {
  */
 function completeTask(taskId) {
   const tasksData = loadTasks();
-  
+  let response = '';
+  let completedTitle = '';
+  let completedId = '';
+  let isSubtask = false;
+  let allSubtasksDone = false;
+
   // Проверяем, является ли ID подзадачей
   if (taskId.includes('.')) {
     const [parentId, subtaskId] = taskId.split('.');
     const parentIdNum = parseInt(parentId);
-    
     // Находим родительскую задачу
     const parentTask = tasksData.tasks.find(task => task.id === parentIdNum);
-    
     if (!parentTask) {
       return `✗ Задача с ID ${parentIdNum} не найдена`;
     }
-    
     // Находим подзадачу
     const subtask = parentTask.subtasks.find(st => st.id === taskId);
-    
     if (!subtask) {
       return `✗ Подзадача с ID ${taskId} не найдена`;
     }
-    
     // Отмечаем подзадачу как выполненную
     subtask.status = 'done';
-    
+    completedTitle = subtask.title;
+    completedId = taskId;
+    isSubtask = true;
     // Проверяем, все ли подзадачи выполнены
-    const allSubtasksDone = parentTask.subtasks.every(st => st.status === 'done');
-    
+    allSubtasksDone = parentTask.subtasks.every(st => st.status === 'done');
     // Если все подзадачи выполнены, отмечаем родительскую задачу как выполненную
     if (allSubtasksDone) {
       parentTask.status = 'done';
     }
-    
     // Обновляем дату изменения
     parentTask.updated_at = new Date().toISOString();
-    
     // Сохраняем изменения
-    if (saveTasks(tasksData)) {
-      // Добавляем запись в историю выполнения и контекст
-      const summary = `Выполнена подзадача ${taskId} "${subtask.title}"`;
-      contextTracker.updateTaskHistory(parentIdNum, 'update', summary);
-
-      if (allSubtasksDone) {
-        contextTracker.updateTaskStatus(parentIdNum, 'done', `Выполнены все подзадачи (${parentTask.subtasks.length})`);
-      }
-      
-      let response = `✓ Подзадача #${taskId} отмечена как выполненная`;
-      if (allSubtasksDone) {
-        response += `\n✓ Все подзадачи выполнены, задача #${parentIdNum} отмечена как выполненная`;
-        response += `\n💡 Контекст задачи обновлен для GitHub Copilot`;
-      } else {
-        response += `\n💡 Контекст подзадачи обновлен для GitHub Copilot`;
-      }
-      return response;
-    } else {
+    if (!saveTasks(tasksData)) {
       return '✗ Не удалось сохранить изменения';
+    }
+    // Добавляем запись в историю выполнения и контекст
+    const summary = `Выполнена подзадача ${taskId} "${subtask.title}"`;
+    contextTracker.updateTaskHistory(parentIdNum, 'update', summary);
+    if (allSubtasksDone) {
+      contextTracker.updateTaskStatus(parentIdNum, 'done', `Выполнены все подзадачи (${parentTask.subtasks.length})`);
     }
   } else {
     // Отмечаем задачу как выполненную
     const taskIdNum = parseInt(taskId);
     const task = tasksData.tasks.find(t => t.id === taskIdNum);
-    
     if (!task) {
       return `✗ Задача с ID ${taskIdNum} не найдена`;
     }
-    
     // Отмечаем задачу и все подзадачи как выполненные
     task.status = 'done';
     task.updated_at = new Date().toISOString();
-    
     if (task.subtasks && task.subtasks.length > 0) {
       task.subtasks.forEach(st => {
         st.status = 'done';
       });
     }
-    
+    completedTitle = task.title;
+    completedId = taskIdNum;
     // Сохраняем изменения
-    if (saveTasks(tasksData)) {
-      // Обновляем контекст задачи
-      const summary = `Выполнена задача "${task.title}"${task.subtasks.length > 0 ? ` и все её подзадачи (${task.subtasks.length})` : ''}`;
-      contextTracker.updateTaskStatus(taskIdNum, 'done', summary);
-
-      return `✓ Задача #${taskIdNum} "${task.title}" отмечена как выполненная\n💡 Контекст задачи обновлен для GitHub Copilot`;
-    } else {
+    if (!saveTasks(tasksData)) {
       return '✗ Не удалось сохранить изменения';
     }
+    // Обновляем контекст задачи
+    const summary = `Выполнена задача "${task.title}"${task.subtasks.length > 0 ? ` и все её подзадачи (${task.subtasks.length})` : ''}`;
+    contextTracker.updateTaskStatus(taskIdNum, 'done', summary);
   }
+
+  // Формируем яркий статус
+  response += `\n\n✅ **СТАТУС: ВЫПОЛНЕНО!**\n`;
+  response += `**${isSubtask ? 'Подзадача' : 'Задача'} #${completedId}: "${completedTitle}"**\n`;
+  response += `\nСтатус задачи изменён на: **done**\n`;
+
+  // Если это подзадача и все подзадачи выполнены, сообщаем об этом
+  if (isSubtask && allSubtasksDone) {
+    response += `\n🎉 Все подзадачи выполнены, задача #${completedId.split('.')[0]} также отмечена как выполненная!`;
+  }
+
+  // Поиск следующей задачи
+  const pendingTasks = tasksData.tasks.filter(task => task.status === 'pending');
+  if (pendingTasks.length > 0) {
+    // Сортировка по приоритету (от 1 до 3)
+    pendingTasks.sort((a, b) => a.priority - b.priority);
+    const nextTask = pendingTasks[0];
+    response += `\n\n➡️ **Следующая задача:** [${nextTask.id}] ${nextTask.title} (приоритет: ${nextTask.priority})`;
+    response += `\nОписание: ${nextTask.description}`;
+    if (nextTask.subtasks && nextTask.subtasks.length > 0) {
+      response += `\nПодзадачи: ${nextTask.subtasks.map(st => st.title).join(', ')}`;
+    }
+    response += `\n\nЧтобы перейти к ней, используйте команду: "Дай следующую задачу" или "Начни выполнение задачи ${nextTask.id}".`;
+  } else {
+    response += `\n\n🎉 Все задачи выполнены! Если хотите что-то скорректировать или добавить — оставайтесь в системе.`;
+  }
+
+  response += `\n\n💡 Контекст задачи обновлён для GitHub Copilot.`;
+  return response;
 }
 
 /**
